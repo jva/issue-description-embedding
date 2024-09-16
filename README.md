@@ -119,6 +119,8 @@ Map issue key column from file to Issues dimension Issues level as key column. M
 - Use a different model to generate embeddings. This uses a 2 year old freely available model https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2 that works on local machine. See LangChain wiki for more available embeddings models. OpenAI probably provide the best ones, but usage is only through cheap but no free API, and requires you to send the text data to OpenAI. See their usage policy to see if that is acceptable.
 - Use this for other textual data. Confluence pages, ticket text from some customer support portal, news articles, tweets, etc.
 
+- 
+
 ### 7. Acknowledgements
 
 Thanks to ChatGPT for advice.
