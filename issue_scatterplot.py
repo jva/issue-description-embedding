@@ -1,48 +1,76 @@
-import sys
+"""
+Embed issue descriptions and project them to 2-D with t-SNE.
+
+USAGE
+-----
+    python embed_tsne.py issues.csv [model-name]
+
+  • `issues.csv` must have two columns: issue-key, description
+  • `model-name` (optional) defaults to 'BAAI/bge-large-en-v1.5'.
+    Other good choices:
+        - 'nomic-ai/nomic-embed-text-v1.5'
+        - 'nvidia/NV-Embed-v2'  (needs instruction prefix, see NOTE)
+
+REQUIREMENTS
+------------
+pip install -U sentence-transformers pandas scikit-learn torch==2.2.*
+"""
+import sys, pathlib
 import pandas as pd
-import json
-from sklearn.manifold import TSNE
 import numpy as np
-from langchain.embeddings import HuggingFaceEmbeddings, SentenceTransformerEmbeddings
+from sklearn.manifold import TSNE
+from sentence_transformers import SentenceTransformer
+import torch
 
-# Initialize the embeddings model
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
-# Function to calculate the embedding for a text string
-def calculate_embedding(text):
-    # Perform the embedding calculation for the text string
-    embedding = embeddings.embed_query(text)
-    return embedding
+def load_model(name: str) -> SentenceTransformer:
+    """Load the embedding model on Apple-GPU if available, else CPU."""
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    print(f"▶ Loading {name} on {device} …")
+    return SentenceTransformer(name, device=device)
 
-# Get the input file path from command-line argument
-input_file_path = sys.argv[1]
 
-# Generate the output file path by appending "-output" to the input file name
-output_file_path = input_file_path.replace(".csv", "-output.csv")
+def embed_texts(model: SentenceTransformer, texts, batch_size: int = 32):
+    """Return L2-normalised embeddings for a list of strings."""
+    return model.encode(
+        texts,
+        batch_size=batch_size,
+        normalize_embeddings=True,
+        show_progress_bar=True,
+    )
 
-# Read the input CSV file using pandas
-data = pd.read_csv(input_file_path, header=None, skiprows=1)
 
-# Extract issue keys and descriptions from the DataFrame
-issue_keys = data.iloc[:, 0].values
-descriptions = data.iloc[:, 1].values
+def main(csv_path: str, model_name: str):
+    in_path  = pathlib.Path(csv_path)
+    out_path = in_path.with_stem(in_path.stem + "-output")
 
-# Calculate embeddings for each description
-embeddings = [calculate_embedding(text) for text in descriptions]
+    # ------------ 1. Read input ------------------------------------------------
+    df = pd.read_csv(in_path, header=None, skiprows=1)
+    issue_keys     = df.iloc[:, 0].tolist()
+    issue_texts    = df.iloc[:, 1].fillna("").tolist()  # guard against NaNs
+    print("input reading - done")
 
-# Convert the embeddings list to a numpy array
-embeddings_array = np.array(embeddings)
+    # ------------ 2. Embeddings ------------------------------------------------
+    model     = load_model(model_name)
+    vectors   = embed_texts(model, issue_texts)
+    vectors   = np.asarray(vectors, dtype=np.float32)
+    print("vectors - done")
 
-# Apply t-SNE for dimension reduction
-tsne = TSNE(n_components=2)
-reduced_data = tsne.fit_transform(embeddings_array)
+    # ------------ 3. 2-D projection -------------------------------------------
+    tsne = TSNE(n_components=2, init="random", learning_rate="auto", verbose=1)
+    coords = tsne.fit_transform(vectors)
 
-# Create a new DataFrame with the issue key and reduced coordinates
-output_data = pd.DataFrame({
-    "issue-key": issue_keys,
-    "x-coordinate": reduced_data[:, 0],
-    "y-coordinate": reduced_data[:, 1]
-})
+    # ------------ 4. Save ------------------------------------------------------
+    out_df = pd.DataFrame(
+        {"issue-key": issue_keys, "x-coordinate": coords[:, 0], "y-coordinate": coords[:, 1]}
+    )
+    out_df.to_csv(out_path.with_suffix(".csv"), index=False)
+    print(f"✅ Written → {out_path.with_suffix('.csv')}")
 
-# Save the output DataFrame to a new CSV file
-output_data.to_csv(output_file_path, index=False)
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit("Usage: python embed_tsne.py issues.csv [model-name]")
+    csv_file   = sys.argv[1]
+    model_name = sys.argv[2] if len(sys.argv) > 2 else "BAAI/bge-large-en-v1.5"
+    main(csv_file, model_name)
